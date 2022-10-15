@@ -9,7 +9,7 @@
                    :addresses {"some-address" {:clients #{}
                                                :balance nil}}}))
 
-(defn add-client [address ch]
+(defn add-client! [address ch]
   (if-some [balance (-> @state :addresses (get address) :balance)]
 
     (send-off
@@ -31,13 +31,13 @@
       (Thread/sleep 1000)
       (recur address ch))))
 
-(defn remove-client [address ch _]
+(defn remove-client! [address ch _]
   (send state (fn [s] (update-in s [:addresses address :clients] #(disj % ch)))))
 
 (defn ws-handler [{{address :address} :params :as req}]
   (org.httpkit.server/as-channel req
-                                 {:on-close (partial remove-client address)
-                                  :on-open  (partial add-client address)}))
+                                 {:on-close (partial remove-client! address)
+                                  :on-open  (partial add-client! address)}))
 
 (compojure.core/defroutes routes
   (compojure.core/GET "/ws/:address" [] ws-handler))
@@ -45,24 +45,24 @@
 (defn update-existing [m k f]
   (if-let [kv (find m k)] (assoc m k (f (val kv))) m))
 
-(defn notify-address [{:keys [balance clients]}]
+(defn notify-address! [{:keys [balance clients]}]
   (doseq [ch clients]
     (org.httpkit.server/send! ch (str balance))))
 
-(defn update-address [delta s]
+(defn update-address! [delta s]
   (-> s
       (update :balance #(+ % delta))
-      (doto notify-address)))
+      (doto notify-address!)))
 
-(defn handle-tx [s {{sender :address} :sender
+(defn handle-tx! [s {{sender :address} :sender
                     {target :address} :target
                     amount :amount}]
   (update s :addresses
           #(-> %
-               (update-existing sender (partial update-address (- amount)))
-               (update-existing target (partial update-address (+ amount))))))
+               (update-existing sender (partial update-address! (- amount)))
+               (update-existing target (partial update-address! (+ amount))))))
 
-(defn poll []
+(defn poll! []
   (let [level (:level @state)
         level-query (if (nil? level) "level.lt=1" (str "level.gt=" level))
         response (-> (str (System/getenv "TZKT_API") "/operations/transactions?amount.gt=0&select=sender,target,amount&" level-query)
@@ -73,7 +73,7 @@
         {{new-level :tzkt-level} :headers} response]
     (send-off state #(as-> % s
                        (assoc s :level new-level)
-                       (reduce handle-tx s txns)))
+                       (reduce handle-tx! s txns)))
     (await state)))
 
 (defn -main [& args]
@@ -82,7 +82,7 @@
     (clojure.core.async/go-loop []
                                 (do
                                   ; TODO: error handling
-                                  (poll)
+                                  (poll!)
                                   (Thread/sleep (Integer/parseInt (System/getenv "POLL_MS")))
                                   (recur)))
 
