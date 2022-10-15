@@ -42,6 +42,27 @@
 (compojure.core/defroutes routes
   (compojure.core/GET "/ws/:address" [] ws-handler))
 
+(defn update-existing-in
+  "Updates a value in a nested associative structure, if and only if the key
+  path exists. See: `clojure.core/update-in`."
+  {:added "1.3.0"}
+  [m ks f & args]
+  (let [up (fn up [m ks f args]
+             (let [[k & ks] ks]
+               (if-let [kv (find m k)]
+                 (if ks
+                   (assoc m k (up (val kv) ks f args))
+                   (assoc m k (apply f (val kv) args)))
+                 m)))]
+    (up m ks f args)))
+
+(defn handle-tx [s {{sender :address} :sender
+                    {target :address} :target
+                    amount :amount}]
+  (-> s
+      (update-existing-in [:addresses sender :balance] #(- % amount))
+      (update-existing-in [:addresses target :balance] #(+ % amount))))
+
 (defn poll []
   (let [level (:level @state)
         level-query (if (nil? level) "level.lt=1" (str "level.gt=" level))
@@ -49,9 +70,11 @@
                      org.httpkit.client/get
                      deref)
         ; TODO: handle limit
-        txns (-> response :body clojure.data.json/read-str)
+        txns (-> response :body (clojure.data.json/read-str :key-fn keyword))
         {{new-level :tzkt-level} :headers} response]
-    (send state (fn [s] (assoc s :level new-level)))
+    (send-off state #(as-> % s
+                       (assoc s :level new-level)
+                       (reduce handle-tx s txns)))
     (await state)))
 
 (defn -main [& args]
