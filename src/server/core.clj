@@ -15,7 +15,7 @@
     (send-off
       state
       (fn [s]
-        (org.httpkit.server/send! ch (clojure.data.json/write-str {:balance (-> s :addresses (get address) :balance)}))
+        (org.httpkit.server/send! ch (-> s :addresses (get address) :balance str))
         (update-in s [:addresses address :clients] #(-> % set (conj ch)))))
 
     (let [response (-> (str (System/getenv "TZKT_API") "/accounts/" address) org.httpkit.client/get deref)
@@ -58,7 +58,7 @@
 
 (defn notify-address [{:keys [balance clients]}]
   (doseq [ch clients]
-    (org.httpkit.server/send! ch (clojure.data.json/write-str {:balance balance}))))
+    (org.httpkit.server/send! ch (str balance))))
 
 (defn update-address [delta s]
   (-> s
