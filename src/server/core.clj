@@ -5,31 +5,34 @@
             clojure.core.async
             clojure.data.json))
 
-(def state (atom {:level nil
-                  :addresses {"some-address" {:clients #{}
-                                              :balance nil}}}))
+(def state (agent {:level nil
+                   :addresses {"some-address" {:clients #{}
+                                               :balance nil}}}))
 
 (defn add-client [address ch]
   (if-some [balance (-> @state :addresses (get address) :balance)]
 
-    (do
-      (org.httpkit.server/send! ch (clojure.data.json/write-str {:balance balance}))
-      ; TODO: may skip updates here
-      (swap! state update-in [:addresses address :clients] #(-> % set (conj ch))))
+    (send-off
+      state
+      (fn [s]
+        (org.httpkit.server/send! ch (clojure.data.json/write-str {:balance (-> s :addresses (get address) :balance)}))
+        (update-in s [:addresses address :clients] #(-> % set (conj ch)))))
 
     (let [response (-> (str (System/getenv "TZKT_API") "/accounts/" address) org.httpkit.client/get deref)
           {{level :tzkt-level} :headers} response
           balance (-> response :body clojure.data.json/read-str (get "balance"))]
       ; TODO: optimize using lastActivity
-      (swap! state (fn [state] 
-                     (if (= (:level state) level)
-                       (assoc-in state [:addresses address :balance] balance)
-                       state)))
+
+      (send state (fn [s]
+                    (if (= (:level s) level)
+                      (assoc-in s [:addresses address :balance] balance)
+                      s)))
+      (await state)
       (Thread/sleep 1000)
       (recur address ch))))
 
 (defn remove-client [address ch _]
-  (swap! state update-in [:addresses address :clients] #(disj % ch)))
+  (send state (fn [s] (update-in s [:addresses address :clients] #(disj % ch)))))
 
 (defn ws-handler [{{address :address} :params :as req}]
   (org.httpkit.server/as-channel req
@@ -48,7 +51,8 @@
         ; TODO: handle limit
         txns (-> response :body clojure.data.json/read-str)
         {{new-level :tzkt-level} :headers} response]
-    (swap! state assoc :level new-level)))
+    (send state (fn [s] (assoc s :level new-level)))
+    (await state)))
 
 (defn -main [& args]
   (let [port (Integer/parseInt (System/getenv "PORT"))]
