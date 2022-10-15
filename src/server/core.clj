@@ -10,8 +10,23 @@
                                               :balance nil}}}))
 
 (defn add-client [address ch]
-  ; TODO: fetch balance
-  (swap! state update-in [:addresses address :clients] #(-> % set (conj ch))))
+  (if-some [balance (-> @state :addresses (get address) :balance)]
+
+    (do
+      (org.httpkit.server/send! ch (clojure.data.json/write-str {:balance balance}))
+      ; TODO: may skip updates here
+      (swap! state update-in [:addresses address :clients] #(-> % set (conj ch))))
+
+    (let [response (-> (str (System/getenv "TZKT_API") "/accounts/" address) org.httpkit.client/get deref)
+          {{level :tzkt-level} :headers} response
+          balance (-> response :body clojure.data.json/read-str (get "balance"))]
+      ; TODO: optimize using lastActivity
+      (swap! state (fn [state] 
+                     (if (= (:level state) level)
+                       (assoc-in state [:addresses address :balance] balance)
+                       state)))
+      (Thread/sleep 1000)
+      (recur address ch))))
 
 (defn remove-client [address ch _]
   (swap! state update-in [:addresses address :clients] #(disj % ch)))
