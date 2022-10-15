@@ -2,7 +2,6 @@
   (:require [org.httpkit.server :as server]
             [org.httpkit.client :as client]
             compojure.core
-            clojure.core.async
             [clojure.data.json :as json]))
 
 (def state (agent {:level nil
@@ -76,15 +75,21 @@
                        (reduce handle-tx! s txns)))
     (await state)))
 
-(defn -main [& args]
-  (let [port (Integer/parseInt (System/getenv "PORT"))]
+(defn -main []
 
-    (clojure.core.async/go-loop []
-                                (do
-                                  ; TODO: error handling
-                                  (poll!)
-                                  (Thread/sleep (Integer/parseInt (System/getenv "POLL_MS")))
-                                  (recur)))
+  (->> (some->>
+         (System/getenv "PORT")
+         Integer/parseInt
+         (assoc {} :port))
+       (merge {:legacy-return-value? false})
+       (server/run-server #'routes)
+       server/server-port
+       (str "Listening at http://localhost:")
+       println)
 
-    (server/run-server #'routes {:port port})
-    (println (str "Running at http://localhost:" port))))
+  (future
+    (while true
+      (do
+        ; TODO: error handling
+        (poll!)
+        (Thread/sleep (-> (System/getenv "POLL_MS") (or "1000") Integer/parseInt))))))
