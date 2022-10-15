@@ -1,9 +1,9 @@
 (ns server.core
-  (:require org.httpkit.server
-            org.httpkit.client
+  (:require [org.httpkit.server :as server]
+            [org.httpkit.client :as client]
             compojure.core
             clojure.core.async
-            clojure.data.json))
+            [clojure.data.json :as json]))
 
 (def state (agent {:level nil
                    :addresses {"some-address" {:clients #{}
@@ -15,12 +15,12 @@
     (send-off
       state
       (fn [s]
-        (org.httpkit.server/send! ch (-> s :addresses (get address) :balance str))
+        (server/send! ch (-> s :addresses (get address) :balance str))
         (update-in s [:addresses address :clients] #(-> % set (conj ch)))))
 
-    (let [response (-> (str (System/getenv "TZKT_API") "/accounts/" address) org.httpkit.client/get deref)
+    (let [response (-> (str (System/getenv "TZKT_API") "/accounts/" address) client/get deref)
           {{level :tzkt-level} :headers} response
-          balance (-> response :body clojure.data.json/read-str (get "balance"))]
+          balance (-> response :body json/read-str (get "balance"))]
       ; TODO: optimize using lastActivity
 
       (send state (fn [s]
@@ -35,9 +35,9 @@
   (send state (fn [s] (update-in s [:addresses address :clients] #(disj % ch)))))
 
 (defn ws-handler [{{address :address} :params :as req}]
-  (org.httpkit.server/as-channel req
-                                 {:on-close (partial remove-client! address)
-                                  :on-open  (partial add-client! address)}))
+  (server/as-channel req
+                     {:on-close (partial remove-client! address)
+                      :on-open  (partial add-client! address)}))
 
 (compojure.core/defroutes routes
   (compojure.core/GET "/ws/:address" [] ws-handler))
@@ -47,7 +47,7 @@
 
 (defn notify-address! [{:keys [balance clients]}]
   (doseq [ch clients]
-    (org.httpkit.server/send! ch (str balance))))
+    (server/send! ch (str balance))))
 
 (defn update-address! [delta s]
   (-> s
@@ -55,8 +55,8 @@
       (doto notify-address!)))
 
 (defn handle-tx! [s {{sender :address} :sender
-                    {target :address} :target
-                    amount :amount}]
+                     {target :address} :target
+                     amount :amount}]
   (update s :addresses
           #(-> %
                (update-existing sender (partial update-address! (- amount)))
@@ -66,10 +66,10 @@
   (let [level (:level @state)
         level-query (if (nil? level) "level.lt=1" (str "level.gt=" level))
         response (-> (str (System/getenv "TZKT_API") "/operations/transactions?amount.gt=0&select=sender,target,amount&" level-query)
-                     org.httpkit.client/get
+                     client/get
                      deref)
         ; TODO: handle limit
-        txns (-> response :body (clojure.data.json/read-str :key-fn keyword))
+        txns (-> response :body (json/read-str :key-fn keyword))
         {{new-level :tzkt-level} :headers} response]
     (send-off state #(as-> % s
                        (assoc s :level new-level)
@@ -86,5 +86,5 @@
                                   (Thread/sleep (Integer/parseInt (System/getenv "POLL_MS")))
                                   (recur)))
 
-    (org.httpkit.server/run-server #'routes {:port port})
+    (server/run-server #'routes {:port port})
     (println (str "Running at http://localhost:" port))))
