@@ -56,17 +56,26 @@
                  m)))]
     (up m ks f args)))
 
+(defn notify-address [{:keys [balance clients]}]
+  (doseq [ch clients]
+    (org.httpkit.server/send! ch (clojure.data.json/write-str {:balance balance}))))
+
+(defn update-address [delta s]
+  (-> s
+      (update :balance #(+ % delta))
+      (doto notify-address)))
+
 (defn handle-tx [s {{sender :address} :sender
                     {target :address} :target
                     amount :amount}]
   (-> s
-      (update-existing-in [:addresses sender :balance] #(- % amount))
-      (update-existing-in [:addresses target :balance] #(+ % amount))))
+      (update-existing-in [:addresses sender] (partial update-address (- amount)))
+      (update-existing-in [:addresses target] (partial update-address (+ amount)))))
 
 (defn poll []
   (let [level (:level @state)
         level-query (if (nil? level) "level.lt=1" (str "level.gt=" level))
-        response (-> (str (System/getenv "TZKT_API") "/operations/transactions?" level-query)
+        response (-> (str (System/getenv "TZKT_API") "/operations/transactions?amount.gt=0&select=sender,target,amount&" level-query)
                      org.httpkit.client/get
                      deref)
         ; TODO: handle limit
