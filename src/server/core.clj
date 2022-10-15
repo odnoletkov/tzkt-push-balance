@@ -15,37 +15,36 @@
        deref))
 
 (defn add-client! [address ch]
-  (if-some [balance (-> @state :addresses (get address) :balance)]
+  (if (-> @state :addresses (get address) :balance some?)
 
     (send-off
       state
-      (fn [s]
-        (server/send! ch (-> s :addresses (get address) :balance str))
-        (update-in s [:addresses address :clients] #(-> % set (conj ch)))))
+      (fn [st]
+        (server/send! ch (-> st :addresses (get address) :balance str))
+        (update-in st [:addresses address :clients] #(-> % set (conj ch)))))
 
-    (let [response (api "/accounts/" address)
-          {{level :tzkt-level} :headers} response
-          balance (-> response :body json/read-str (get "balance"))]
+    (let [account (api "/accounts/" address)
+          {{level-of-balance :tzkt-level} :headers} account
+          balance (-> account :body json/read-str (get "balance"))]
       ; TODO: optimize using lastActivity
 
-      (send state (fn [s]
-                    (if (= (:level s) level)
-                      (assoc-in s [:addresses address :balance] balance)
-                      s)))
-      (await state)
+      (await (send state (fn [st]
+                           (if (= (:level st) level-of-balance)
+                             (assoc-in st [:addresses address :balance] balance)
+                             st))))
       (Thread/sleep 1000)
       (recur address ch))))
 
 (defn remove-client! [address ch _]
-  (send state (fn [s] (update-in s [:addresses address :clients] #(disj % ch)))))
+  (send state (fn [st] (update-in st [:addresses address :clients] #(disj % ch)))))
 
-(defn ws-handler [{{address :address} :params :as req}]
+(defn websocket-handler [{{address :address} :params :as req}]
   (server/as-channel req
                      {:on-close (partial remove-client! address)
                       :on-open  (partial add-client! address)}))
 
 (compojure.core/defroutes routes
-  (compojure.core/GET "/ws/:address" [] ws-handler))
+  (compojure.core/GET "/ws/:address" [] websocket-handler))
 
 (defn update-existing [m k f]
   (if-let [kv (find m k)] (assoc m k (f (val kv))) m))
@@ -54,15 +53,15 @@
   (doseq [ch clients]
     (server/send! ch (str balance))))
 
-(defn update-address! [delta s]
-  (-> s
+(defn update-address! [delta st]
+  (-> st
       (update :balance #(+ % delta))
       (doto notify-address!)))
 
-(defn handle-tx! [s {{sender :address} :sender
-                     {target :address} :target
-                     amount :amount}]
-  (update s :addresses
+(defn handle-tx! [st {{sender :address} :sender
+                      {target :address} :target
+                      amount :amount}]
+  (update st :addresses
           #(-> %
                (update-existing sender (partial update-address! (- amount)))
                (update-existing target (partial update-address! (+ amount))))))
@@ -74,10 +73,9 @@
         ; TODO: handle limit
         txns (-> response :body (json/read-str :key-fn keyword))
         {{new-level :tzkt-level} :headers} response]
-    (send-off state #(as-> % s
-                       (assoc s :level new-level)
-                       (reduce handle-tx! s txns)))
-    (await state)))
+    (await (send-off state #(as-> % st
+                              (assoc st :level new-level)
+                              (reduce handle-tx! st txns))))))
 
 (defn -main []
 
