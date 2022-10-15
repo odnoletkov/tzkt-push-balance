@@ -1,12 +1,18 @@
 (ns server.core
   (:require [org.httpkit.server :as server]
-            [org.httpkit.client :as client]
+            org.httpkit.client
             compojure.core
             [clojure.data.json :as json]))
 
 (def state (agent {:level nil
                    :addresses {"some-address" {:clients #{}
                                                :balance nil}}}))
+
+(defn api [& parts]
+  (->> parts
+       (apply str (or (System/getenv "TZKT_API") "https://api.tzkt.io/v1"))
+       org.httpkit.client/get
+       deref))
 
 (defn add-client! [address ch]
   (if-some [balance (-> @state :addresses (get address) :balance)]
@@ -17,7 +23,7 @@
         (server/send! ch (-> s :addresses (get address) :balance str))
         (update-in s [:addresses address :clients] #(-> % set (conj ch)))))
 
-    (let [response (-> (str (System/getenv "TZKT_API") "/accounts/" address) client/get deref)
+    (let [response (api "/accounts/" address)
           {{level :tzkt-level} :headers} response
           balance (-> response :body json/read-str (get "balance"))]
       ; TODO: optimize using lastActivity
@@ -64,9 +70,7 @@
 (defn poll! []
   (let [level (:level @state)
         level-query (if (nil? level) "level.lt=1" (str "level.gt=" level))
-        response (-> (str (System/getenv "TZKT_API") "/operations/transactions?amount.gt=0&select=sender,target,amount&" level-query)
-                     client/get
-                     deref)
+        response (api "/operations/transactions?amount.gt=0&select=sender,target,amount&" level-query)
         ; TODO: handle limit
         txns (-> response :body (json/read-str :key-fn keyword))
         {{new-level :tzkt-level} :headers} response]
