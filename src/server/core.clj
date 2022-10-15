@@ -2,13 +2,27 @@
   (:require org.httpkit.server
             org.httpkit.client
             compojure.core
-            clojure.core.async))
+            clojure.core.async
+            clojure.data.json))
+
+(def state (atom {:level nil
+                  :addresses {"some-address" {:clients #{}
+                                              :balance nil}}}))
+
+(defn add-client [address ch]
+  ; TODO: fetch balance
+  (swap! state update-in [:addresses address :clients] #(-> % set (conj ch))))
+
+(defn remove-client [address ch _]
+  (swap! state update-in [:addresses address :clients] #(disj % ch)))
+
+(defn ws-handler [{{address :address} :params :as req}]
+  (org.httpkit.server/as-channel req
+                                 {:on-close (partial remove-client address)
+                                  :on-open  (partial add-client address)}))
 
 (compojure.core/defroutes routes
-  (compojure.core/GET "/" []
-                      {:status 200}))
-
-(def state (atom {}))
+  (compojure.core/GET "/ws/:address" [] ws-handler))
 
 (defn poll []
   (let [level (:level @state)
@@ -17,6 +31,7 @@
                      org.httpkit.client/get
                      deref)
         ; TODO: handle limit
+        txns (-> response :body clojure.data.json/read-str)
         {{new-level :tzkt-level} :headers} response]
     (swap! state assoc :level new-level)))
 
