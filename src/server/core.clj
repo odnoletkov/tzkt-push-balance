@@ -9,10 +9,10 @@
                                                :balance nil}}}))
 
 (defn api [& parts]
-  (->> parts
-       (apply str (or (System/getenv "TZKT_API") "https://api.tzkt.io/v1"))
-       org.httpkit.client/get
-       deref))
+  (-> (apply str (or (System/getenv "TZKT_API") "https://api.tzkt.io/v1") parts)
+      org.httpkit.client/get
+      deref
+      (doto (-> :status (= 200) assert))))
 
 (defn add-client! [address ch]
   (if (-> @state :addresses (get address) :balance some?)
@@ -93,6 +93,5 @@
   (future
     (while true
       (do
-        ; TODO: error handling
         (poll!)
         (Thread/sleep (-> (System/getenv "POLL_MS") (or "1000") Integer/parseInt))))))
