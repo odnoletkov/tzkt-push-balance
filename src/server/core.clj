@@ -70,10 +70,11 @@
 (defn poll! []
   (let [level (:level @state)
         level-query (if (nil? level) "level.lt=1" (str "level.gt=" level))
-        response (api "/operations/transactions?amount.gt=0&select=sender,target,amount&" level-query)
-        ; TODO: handle limit
+        limit 10000
+        response (api "/operations/transactions?amount.gt=0&select=sender,target,amount&limit=" limit "&" level-query)
         txns (-> response :body (json/read-str :key-fn keyword))
         {{new-level :tzkt-level} :headers} response]
+    (assert (< (count txns) limit))
     (await (send-off state #(as-> % st
                               (assoc st :level (Integer/parseInt new-level))
                               (reduce handle-tx! st txns))))))
