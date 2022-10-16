@@ -25,13 +25,14 @@
 
     (let [account (api "/accounts/" address)
           {{level-of-balance :tzkt-level} :headers} account
-          balance (-> account :body json/read-str (get "balance"))]
-      ; TODO: optimize using lastActivity
+          {:strs [balance lastActivity]} (-> account :body json/read-str)]
 
-      (await (send state (fn [st]
-                           (if (= (:level st) level-of-balance)
-                             (assoc-in st [:addresses address :balance] balance)
-                             st))))
+      (await
+        (send state (fn [{current-level :level :as st}]
+                      (if (<= lastActivity current-level (Integer/parseInt level-of-balance))
+                        (assoc-in st [:addresses address :balance] balance)
+                        st))))
+
       (Thread/sleep 1000)
       (recur address ch))))
 
@@ -74,7 +75,7 @@
         txns (-> response :body (json/read-str :key-fn keyword))
         {{new-level :tzkt-level} :headers} response]
     (await (send-off state #(as-> % st
-                              (assoc st :level new-level)
+                              (assoc st :level (Integer/parseInt new-level))
                               (reduce handle-tx! st txns))))))
 
 (defn -main []
